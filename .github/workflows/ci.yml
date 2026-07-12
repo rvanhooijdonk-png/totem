@@ -25,3 +25,19 @@ jobs:
         run: npx vitest run
       - name: Build
         run: npx tsc
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (secret-scan, blokkerend)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: npm audit (dependency-CVE, rapporterend)
+        run: npm audit --audit-level=high || echo "::warning::npm audit vond kwetsbaarheden (rapporterend)"
