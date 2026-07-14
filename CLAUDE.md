@@ -34,7 +34,8 @@ Alles onder de END-marker = project-overlay. Overlay mag de core **aanscherpen**
 - Brug: `_coa-brug/` (vault-canoniek)
 - Runtime: zie register `~/admin/projecten.json` · bewaking: zie BEWAKING-DEKKINGSPLAN.md
 - Contracten die deze repo deelt: zie RAAKVLAKKEN.md
-- Gates/eigen regels (aanscherpingen): <nog in te vullen — minimale overlay v1>
+- Gates/eigen regels (aanscherpingen):
+  - **DUAL-REVIEW VERPLICHT vóór KLAAR (Richard-besluit 2026-07-14, geen uitzondering).** Elke niet-triviale/niet-read-only wijziging (bouw, DDL, security, geld-pad, live-gedrag) MOET door Codex ÉN Gemini gereviewd zijn vóórdat je 'm als KLAAR/behandeld meetelt. Reviewer niet beschikbaar → item blijft expliciet **REVIEW-PENDING** in §8 en telt NIET mee in een "X/X behandeld"-regel. Mechanisch/read-only werk blijft uitgezonderd ("n.v.t." terecht). Gemini draai je via `~/coa/scripts/gemini_review.sh` in een login-shell (key in `~/coa/.secrets`, node op `/usr/local/bin`). "Gemini: REVIEW-PENDING (geen key)" is geen acceptabele eindstatus.
 - ADR-afwijkingen van de core: geen
 - Goal-ledger: <G-…-verwijzing te bepalen>
 <!-- PROJECT-OVERLAY END -->
