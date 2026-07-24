@@ -1,60 +1,67 @@
 #!/usr/bin/env bash
-# pre-commit hook — gitleaks + blokkeer gevaarlijke bestandsnamen
-# Gedeeld door alle repos; niet handmatig aanpassen.
-# Bypassen alleen via: git commit --no-verify -m "no-verify: <reden>"
+# Canonieke fail-closed pre-commit-poort: bestandsnamen, gitleaks en opt-in tests.
+# Geen interne omweg en geen fail-open pad; iedere scanner-/config-/testfout blokkeert.
 set -euo pipefail
 
-GITLEAKS="$HOME/.local/bin/gitleaks"
-GITLEAKS_CONFIG="$HOME/.config/gitleaks/gitleaks.toml"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+STAGED_PATHS_FILE=$(mktemp "${TMPDIR:-/tmp}/pre-commit-staged.XXXXXX")
+cleanup() {
+    rm -f "$STAGED_PATHS_FILE"
+}
+trap cleanup EXIT HUP INT TERM
 
 # ── 1. Blokkeer gevaarlijke bestandsnamen ──────────────────────────────────────
-STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+git diff --cached --name-only --diff-filter=ACM -z >"$STAGED_PATHS_FILE"
 
-while IFS= read -r PAD; do
-    [ -z "$PAD" ] && continue
-    NAAM=$(basename "$PAD" | tr '[:upper:]' '[:lower:]')
+while IFS= read -r -d '' PAD; do
+    NAAM=$(basename -- "$PAD" | tr '[:upper:]' '[:lower:]')
 
-    # .env exact of als extensie (.env, .env.local, .env.production, ...)
-    if echo "$NAAM" | grep -qiE '(^\.env$|^\.env\.|\.env$)'; then
-        echo "❌ GEBLOKKEERD: bestandsnaam bevat .env — $PAD"
-        echo "   Zet gevoelige waarden nooit in Git. Gebruik env-var verwijzingen."
+    if [[ "$NAAM" =~ (^\.env$|^\.env\.|\.env$) ]]; then
+        echo "❌ GEBLOKKEERD: bestandsnaam bevat .env — $PAD" >&2
+        echo "   Zet gevoelige waarden nooit in Git. Gebruik env-var-verwijzingen." >&2
         exit 1
     fi
 
-    # token, secret, wachtwoord in bestandsnaam
-    if echo "$NAAM" | grep -qiE '(token|secret|wachtwoord)'; then
-        echo "❌ GEBLOKKEERD: bestandsnaam bevat gevoelig sleutelwoord — $PAD"
-        echo "   Hernoem het bestand; gevoelige namen worden geweigerd ongeacht inhoud."
+    if [[ "$NAAM" =~ (token|secret|wachtwoord) ]]; then
+        echo "❌ GEBLOKKEERD: bestandsnaam bevat gevoelig sleutelwoord — $PAD" >&2
+        echo "   Hernoem het bestand; gevoelige namen worden geweigerd ongeacht inhoud." >&2
         exit 1
     fi
-done <<< "$STAGED"
+done <"$STAGED_PATHS_FILE"
 
 # ── 2. Gitleaks op staged changes ──────────────────────────────────────────────
-if [ ! -x "$GITLEAKS" ]; then
-    echo "⚠️  gitleaks niet gevonden op $GITLEAKS — installeer via:"
-    echo "    curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest -o /tmp/gl.tar.gz"
-    echo "    tar -xzf /tmp/gl.tar.gz -C ~/.local/bin gitleaks"
-    exit 0
+if ! GITLEAKS_BIN=$(command -v gitleaks); then
+    echo "❌ GEBLOKKEERD: gitleaks ontbreekt in PATH; scanner is verplicht." >&2
+    exit 1
+fi
+if [[ ! -x "$GITLEAKS_BIN" ]]; then
+    echo "❌ GEBLOKKEERD: gitleaks is niet uitvoerbaar — $GITLEAKS_BIN" >&2
+    exit 1
 fi
 
-if ! "$GITLEAKS" protect --staged -c "$GITLEAKS_CONFIG" --no-banner 2>&1; then
-    echo ""
-    echo "❌ gitleaks detecteerde een mogelijke secret in de staged files."
-    echo "   Verwijder de waarde of voeg een gitleaks:allow-comment toe in de regel."
-    echo "   Skippen alleen met expliciete reden: git commit --no-verify -m 'no-verify: <reden>'"
+GITLEAKS_ARGS=(git --pre-commit --staged --redact --no-banner)
+if [[ -e "$REPO_ROOT/.gitleaks.toml" ]]; then
+    if [[ ! -f "$REPO_ROOT/.gitleaks.toml" || ! -r "$REPO_ROOT/.gitleaks.toml" ]]; then
+        echo "❌ GEBLOKKEERD: .gitleaks.toml is geen leesbaar regulier bestand." >&2
+        exit 1
+    fi
+    GITLEAKS_ARGS+=(--config "$REPO_ROOT/.gitleaks.toml")
+fi
+
+if ! "$GITLEAKS_BIN" "${GITLEAKS_ARGS[@]}" "$REPO_ROOT"; then
+    echo "❌ GEBLOKKEERD: gitleaks vond een secret of kon de scan niet voltooien." >&2
     exit 1
 fi
 
 # ── 3. Per-repo test-gate (opt-in) ─────────────────────────────────────────────
-# Draait als de repo een uitvoerbaar .githooks/pre-commit-tests.sh heeft. Rood = blokkeren.
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
-if [ -x "$REPO_ROOT/.githooks/pre-commit-tests.sh" ]; then
-    if ! "$REPO_ROOT/.githooks/pre-commit-tests.sh"; then
-        echo ""
-        echo "❌ pre-commit tests FAALDEN — commit geblokkeerd."
-        echo "   Skippen alleen met expliciete reden: git commit --no-verify -m 'no-verify: <reden>'"
-        exit 1
-    fi
+TEST_GATE="$REPO_ROOT/.githooks/pre-commit-tests.sh"
+if [[ -e "$TEST_GATE" && ! -x "$TEST_GATE" ]]; then
+    echo "❌ GEBLOKKEERD: pre-commit-tests.sh bestaat maar is niet uitvoerbaar." >&2
+    exit 1
+fi
+if [[ -x "$TEST_GATE" ]] && ! "$TEST_GATE"; then
+    echo "❌ GEBLOKKEERD: pre-commit tests faalden." >&2
+    exit 1
 fi
 
 exit 0
