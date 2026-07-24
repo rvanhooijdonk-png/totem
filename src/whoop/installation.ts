@@ -8,7 +8,7 @@
 // which is stable for that process's lifetime.
 
 import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, createHmac } from "node:crypto";
 
 /**
  * Ensure `WHOOP_INSTALLATION_ID` exists in the environment, generating and
@@ -22,7 +22,17 @@ import { randomUUID, createHash } from "node:crypto";
 // random one per process. Shaped like the app's uppercase UUID (8-4-4-4-12).
 function deterministicId(email: string | undefined): string | null {
   if (!email) return null;
-  const h = createHash("sha256").update(`totem/install/${email.toLowerCase()}`).digest("hex");
+  const seed = `totem/install/${email.toLowerCase()}`;
+  // HMAC (keyed) als de per-doel sleutel WHOOP_INSTALL_HMAC_KEY gezet is: voorkomt dat
+  // de account-e-mail uit de installatie-id terug te rekenen is (statische prefix +
+  // kleine e-mail-ruimte = brute-force-baar). LET OP: de id MOET stabiel blijven — deze
+  // sleutel moet dus permanent zijn; hem zetten of wijzigen verandert de id eenmalig
+  // (= één nieuwe installatie bij WHOOP). Fallback naar sha256 zolang niet gezet
+  // (additief, exact huidig gedrag). Per-doel sleutel (Fable-besluit nacht 2026-07-13).
+  const key = process.env.WHOOP_INSTALL_HMAC_KEY;
+  const h = key
+    ? createHmac("sha256", key).update(seed).digest("hex")
+    : createHash("sha256").update(seed).digest("hex");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`.toUpperCase();
 }
 

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Canonieke fail-closed pre-commit-poort: bestandsnamen, gitleaks en opt-in tests.
+# Geen interne omweg en geen fail-open pad; iedere scanner-/config-/testfout blokkeert.
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+STAGED_PATHS_FILE=$(mktemp "${TMPDIR:-/tmp}/pre-commit-staged.XXXXXX")
+cleanup() {
+    rm -f "$STAGED_PATHS_FILE"
+}
+trap cleanup EXIT HUP INT TERM
+
+# ── 1. Blokkeer gevaarlijke bestandsnamen ──────────────────────────────────────
+git diff --cached --name-only --diff-filter=ACM -z >"$STAGED_PATHS_FILE"
+
+while IFS= read -r -d '' PAD; do
+    NAAM=$(basename -- "$PAD" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$NAAM" =~ (^\.env$|^\.env\.|\.env$) ]]; then
+        echo "❌ GEBLOKKEERD: bestandsnaam bevat .env — $PAD" >&2
+        echo "   Zet gevoelige waarden nooit in Git. Gebruik env-var-verwijzingen." >&2
+        exit 1
+    fi
+
+    if [[ "$NAAM" =~ (token|secret|wachtwoord) ]]; then
+        echo "❌ GEBLOKKEERD: bestandsnaam bevat gevoelig sleutelwoord — $PAD" >&2
+        echo "   Hernoem het bestand; gevoelige namen worden geweigerd ongeacht inhoud." >&2
+        exit 1
+    fi
+done <"$STAGED_PATHS_FILE"
+
+# ── 2. Gitleaks op staged changes ──────────────────────────────────────────────
+if ! GITLEAKS_BIN=$(command -v gitleaks); then
+    echo "❌ GEBLOKKEERD: gitleaks ontbreekt in PATH; scanner is verplicht." >&2
+    exit 1
+fi
+if [[ ! -x "$GITLEAKS_BIN" ]]; then
+    echo "❌ GEBLOKKEERD: gitleaks is niet uitvoerbaar — $GITLEAKS_BIN" >&2
+    exit 1
+fi
+
+GITLEAKS_ARGS=(git --pre-commit --staged --redact --no-banner)
+if [[ -e "$REPO_ROOT/.gitleaks.toml" ]]; then
+    if [[ ! -f "$REPO_ROOT/.gitleaks.toml" || ! -r "$REPO_ROOT/.gitleaks.toml" ]]; then
+        echo "❌ GEBLOKKEERD: .gitleaks.toml is geen leesbaar regulier bestand." >&2
+        exit 1
+    fi
+    GITLEAKS_ARGS+=(--config "$REPO_ROOT/.gitleaks.toml")
+fi
+
+if ! "$GITLEAKS_BIN" "${GITLEAKS_ARGS[@]}" "$REPO_ROOT"; then
+    echo "❌ GEBLOKKEERD: gitleaks vond een secret of kon de scan niet voltooien." >&2
+    exit 1
+fi
+
+# ── 3. Per-repo test-gate (opt-in) ─────────────────────────────────────────────
+TEST_GATE="$REPO_ROOT/.githooks/pre-commit-tests.sh"
+if [[ -e "$TEST_GATE" && ! -x "$TEST_GATE" ]]; then
+    echo "❌ GEBLOKKEERD: pre-commit-tests.sh bestaat maar is niet uitvoerbaar." >&2
+    exit 1
+fi
+if [[ -x "$TEST_GATE" ]] && ! "$TEST_GATE"; then
+    echo "❌ GEBLOKKEERD: pre-commit tests faalden." >&2
+    exit 1
+fi
+
+exit 0
