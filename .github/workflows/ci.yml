@@ -1,19 +1,24 @@
 name: CI
 
-# Rigorously verify every change before it lands: typecheck + full test suite +
-# build, on every push to main AND every pull request. A red check here blocks
-# the merge button, so nothing unverified reaches main.
+# Verify every change before it lands: typecheck + full test suite + build, on
+# every push to main and every pull request.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.2.0
         with:
           node-version: "24"
           cache: npm
@@ -25,3 +30,19 @@ jobs:
         run: npx vitest run
       - name: Build
         run: npx tsc
+
+  secrets:
+    name: gitleaks secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan pull request commit range
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
